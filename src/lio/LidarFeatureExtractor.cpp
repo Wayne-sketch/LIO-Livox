@@ -1,25 +1,58 @@
 #include "LidarFeatureExtractor/LidarFeatureExtractor.h"
 
+//ctx: 构造函数，初始化列表 9个参数
+/*
+1、n_scans: int，lidar扫描线数
+2、NumCurvSize: int，表示曲率点的数量 ？
+3、DistanceFaraway: float，表示远处的距离。
+4、NumFlat: int，表示平坦点的数量。
+5、PartNum: int，表示分割点的数量。
+6、FlatThreshold: float，表示平坦度的阈值。
+7、BreakCornerDis: float，表示打破角点的距离。
+8、LidarNearestDis: float，表示激光雷达最近点的距离。
+9、KdTreeCornerOutlierDis: float，表示Kd树角点的离群值距离。没用到？*/
 LidarFeatureExtractor::LidarFeatureExtractor(int n_scans,int NumCurvSize,float DistanceFaraway,int NumFlat,
                                              int PartNum,float FlatThreshold,float BreakCornerDis,float LidarNearestDis,float KdTreeCornerOutlierDis)
-                                             :N_SCANS(n_scans),
+                                             :N_SCANS(n_scans),//lidar扫描线数
                                               thNumCurvSize(NumCurvSize),
                                               thDistanceFaraway(DistanceFaraway),
-                                              thNumFlat(NumFlat),
+                                              thNumFlat(NumFlat),//最大平坦点数量
                                               thPartNum(PartNum),
                                               thFlatThreshold(FlatThreshold),
                                               thBreakCornerDis(BreakCornerDis),
                                               thLidarNearestDis(LidarNearestDis){
+  //为vlines、vcorner和vsurf这三个成员变量分配内存空间。
+  //原始点云数据，vector<点云指针>    vlines.resize(N_SCANS) 将 vlines 初始化为包含 N_SCANS 个元素的空的vector。
+  //ctx: PointType - pcl::PointXYZINormal 保存每条线的原始数据，每个元素都是点云指针，代表一条lidar线上的点云
   vlines.resize(N_SCANS);
+  //遍历点云
   for(auto & ptr : vlines){
     ptr.reset(new pcl::PointCloud<PointType>());
   }
+  //保存每条线的角点的索引 vector<vector<int>>
   vcorner.resize(N_SCANS);
+  //保存每条线的surf特征点的索引 vector<vector<int>>s
   vsurf.resize(N_SCANS);
 }
 
+
+/*原理：
+在点云数据中，如果所有点都位于一个平面上，则该平面可以用一个二维平面表示。在二维平面中，只需要两个坐标轴（通常是X和Y轴）来表示所有点的位置。这意味着在这个平面上，
+所有点的运动方向或分布主要集中在这两个坐标轴上，而在垂直于这个平面的方向上的运动或分布应该相对较小。
+
+奇异值分解（Singular Value Decomposition，SVD）是一种矩阵分解技术，可以将一个矩阵分解成三个矩阵的乘积：A = U * S * V^T。其中，U和V是正交矩阵，S是一个对角矩阵，对角线上的元素称为奇异值。
+在这里，我们通过奇异值分解对计算的平均平方误差矩阵进行分解。平均平方误差矩阵描述了点云数据在三个坐标轴（X、Y、Z）方向上的离散程度。若点云在一个平面上，它们的运动主要集中在平面上的两个方向，
+即Z轴方向上的方差较小。
+
+当我们比较第一个奇异值 _matD1(0, 0) 和第二个奇异值 _matD1(1, 0) 的大小时，如果第一个奇异值远小于第二个奇异值，即 _matD1(0, 0) < plane_threshold * _matD1(1, 0) 条件成立，
+那么可以认为数据在Z轴方向上的方差较小，而主要集中在一个平面上。这是因为如果数据在一个平面上，则在Z轴方向上的运动或分布相对较小，导致第一个奇异值较小。
+
+因此，通过比较奇异值，我们可以得出点云数据是否主要位于一个平面上的结论。请注意，plane_threshold 是一个阈值参数，用于控制判断的敏感度，其具体取值根据具体应用和点云数据的特性进行调整。*/
+
+//判断给定点云列表是否表示一个平面
 bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list,const int plane_threshold)
 {
+  //计算给定点云列表 point_list 中所有点的平均坐标 (cx, cy, cz)。
   int num = point_list.size();
   float cx = 0;
   float cy = 0;
@@ -29,9 +62,13 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
     cy += point_list[j].y;
     cz += point_list[j].z;
   }
+  //将结果存储在 cx、cy 和 cz 变量中
   cx /= num;
   cy /= num;
   cz /= num;
+
+  //这部分代码计算了点云列表中点与平均点坐标之间的差值，并用这些差值计算平均平方误差矩阵。
+  //该平方误差矩阵是一个3x3的矩阵，其中每个元素表示点与平均点之间的偏差。这些偏差后来被用来判断点云列表是否表示一个平面。
   //mean square error
   float a11 = 0;
   float a12 = 0;
@@ -39,11 +76,12 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
   float a22 = 0;
   float a23 = 0;
   float a33 = 0;
+  //遍历点云
   for (int j = 0; j < num; j++) {
     float ax = point_list[j].x - cx;
     float ay = point_list[j].y - cy;
     float az = point_list[j].z - cz;
-
+    //计算每个点到平均点差值的平方和
     a11 += ax * ax;
     a12 += ax * ay;
     a13 += ax * az;
@@ -51,6 +89,7 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
     a23 += ay * az;
     a33 += az * az;
   }
+  //平均平方误差值
   a11 /= num;
   a12 /= num;
   a13 /= num;
@@ -65,6 +104,7 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
   Eigen::Matrix< double, 3, 3 > _matV1;
   _matV1.setZero();
 
+  //matA1对称矩阵 协方差矩阵
   _matA1(0, 0) = a11;
   _matA1(0, 1) = a12;
   _matA1(0, 2) = a13;
@@ -75,9 +115,29 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
   _matA1(2, 1) = a23;
   _matA1(2, 2) = a33;
 
+  //使用JacobiSVD（奇异值分解）对 _matA1 进行分解，得到奇异值和左奇异向量矩阵。
+  //左奇异向量是原始矩阵的列向量，而右奇异向量是原始矩阵的行向量。
+  /* 其他可能的设置参数(未实验验证)
+  Eigen::ComputeFullU and Eigen::ComputeFullV:
+  这两个选项用于计算完整的左奇异向量矩阵和右奇异向量矩阵。与之前的Thin选项不同，这些选项将计算完整的奇异向量矩阵，不进行截断，输出完整的矩阵。
+
+  Eigen::AllowOutOfCoreComputation:
+  这个选项用于允许JacobiSVD在内存不足时，使用外存储器来计算奇异值分解。当处理非常大的矩阵时，可能会遇到内存不足的问题，设置这个选项可以帮助解决这个问题。
+
+  Eigen::ComputeFullU | Eigen::ComputeFullV:
+  这是一个组合选项，用于同时计算完整的左奇异向量矩阵和右奇异向量矩阵。
+
+  Eigen::ComputeThinU | Eigen::ComputeThinV | Eigen::FullPivHouseholderQRPreconditioner:
+  这也是一个组合选项，用于计算完整的左奇异向量矩阵和右奇异向量矩阵，并使用FullPivHouseholderQR预处理器来优化计算。
+
+  Eigen::ComputeThinU | Eigen::ComputeThinV | Eigen::ComputeFullU | Eigen::ComputeFullV:
+  这是一个非常完整的组合选项，可以同时计算所有可能的结果，包括Thin和Full的左右奇异向量矩阵。*/
   Eigen::JacobiSVD<Eigen::Matrix3d> svd(_matA1, Eigen::ComputeThinU | Eigen::ComputeThinV);
   _matD1 = svd.singularValues();
   _matV1 = svd.matrixU();
+  //判断点云列表是否表示一个平面
+  //SVD分解找到主要分布方向
+  //它比较第一个奇异值和第二个奇异值的大小，如果第一个奇异值远远小于第二个奇异值的 plane_threshold 倍，就返回 true 表示点云列表表示一个平面，否则返回 false 表示不是平面。
   if (_matD1(0, 0) < plane_threshold * _matD1(1, 0)) {
     return true;
   }
@@ -86,81 +146,123 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
   }
 }
 
+//点云特征提取
+//第一个参数是点云指针的引用，可能要修改点云指针，提取的特征点存储在两个vector中
+//该算法旨在检测三种类型的特征点：尖锐的拐角、平坦的表面以及表面相遇处的断点。
+//输出：识别出的尖锐拐角点被添加到laserCloudCorner点云中，并将尖锐拐角点和平坦表面点的索引添加到pointsLessSharp和pointsLessFlat向量中。
 void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 std::vector<int>& pointsLessSharp,
                                                 std::vector<int>& pointsLessFlat){
+  /*特征标志：使用固定大小的数组CloudFeatureFlag来存储每个点的标志。标志的值用于将每个点归类如下：
+  0：未处理的点（初始值为0）。
+  1：与平坦表面相关联的点。
+  2：与尖锐拐角相关联的点。
+  3：被视为表面相遇处的断点。*/
+  //用于存储每个点的特征标志的数组，初始时都设置为0。
   int CloudFeatureFlag[20000];
+
+  //用于存储每个点的曲率值的数组。
   float cloudCurvature[20000];
+
+  //用于存储每个点到激光雷达的距离的数组。
   float cloudDepth[20000];
+
+  //用于存储点云点的索引，将会根据曲率值从小到大进行排序。
   int cloudSortInd[20000];
+
+  //用于存储每个点的反射强度的数组。
   float cloudReflect[20000];
+
+  //用于存储点云点的索引，将会根据反射强度从小到大进行排序。
   int reflectSortInd[20000];
+
+  //用于存储每个点的角度标志的数组。？
   int cloudAngle[20000];
 
+  //给传进来的点云指针创建一个引用
   pcl::PointCloud<PointType>::Ptr& laserCloudIn = cloud;
-
+  //获取输入点云的大小
   int cloudSize = laserCloudIn->points.size();
-
+  //临时变量point 一个点
   PointType point;
+  //定义一个新的点云对象_laserCloud，用于存储去除非法点后的点云
+  //new出一个点云，()的意思是调用默认构造函数，返回一个点云指针，作为pcl::PointCloud<PointType>::Ptr类构造函数的参数 猜测pcl::PointCloud<PointType>::Ptr类是智能指针类
   pcl::PointCloud<PointType>::Ptr _laserCloud(new pcl::PointCloud<PointType>());
+  //预先分配空间，以避免在添加点时不断重新分配内存。
   _laserCloud->reserve(cloudSize);
 
+  //遍历点云中的点
   for (int i = 0; i < cloudSize; i++) {
     point.x = laserCloudIn->points[i].x;
     point.y = laserCloudIn->points[i].y;
     point.z = laserCloudIn->points[i].z;
+//条件编译，如果定义了UNDISTORT宏，则执行#ifdef UNDISTORT和#endif之间的代码，否则执行#else和#endif之间的代码。
+//如果UNDISTORT被定义，则获取点云中第i个点的法线normal_x（前提是点云中包含了法线信息）。如果未定义UNDISTORT，则将点的法线normal_x设置为1.0（默认值）。
 #ifdef UNDISTORT
     point.normal_x = laserCloudIn.points[i].normal_x;
 #else
     point.normal_x = 1.0;
 #endif
-    point.intensity = laserCloudIn->points[i].intensity;
 
+    //获取点云中第i个点的反射强度。
+    point.intensity = laserCloudIn->points[i].intensity;
+    //如果点的x、y或z坐标中存在非有限值（例如NaN或Inf），则跳过当前点，不加入新的点云对象。
     if (!pcl_isfinite(point.x) ||
         !pcl_isfinite(point.y) ||
         !pcl_isfinite(point.z)) {
       continue;
     }
-
+    //将新的点point加入_laserCloud点云对象中
     _laserCloud->push_back(point);
+    //为当前点设置初始特征标志为0（未处理）。
     CloudFeatureFlag[i] = 0;
-  }
+  }//点云中的点遍历完成一次
 
+  //点云中的点遍历完成后，更新cloudSize，表示去除非法点后的点云大小。
   cloudSize = _laserCloud->size();
 
+  //定义并初始化用于调试的计数器变量。
   int debugnum1 = 0;
   int debugnum2 = 0;
   int debugnum3 = 0;
   int debugnum4 = 0;
   int debugnum5 = 0;
 
+  //用于控制点云遍历时的步长，默认为1。
   int count_num = 1;
+  //用于标记是否检测到左右表面。
   bool left_surf_flag = false;
   bool right_surf_flag = false;
 
   //---------------------------------------- surf feature extract ---------------------------------------------
+  /*表面特征提取（surf feature extract）：代码迭代遍历点云以检测平坦表面点。它计算每个点及其邻近点的曲率，以确定是否属于平坦表面。该算法考虑点的深度和邻近点之间的角度来分类表面点。*/
+  //定义了点云处理的起始和结束索引，排除了前5个点和后5个点。
   int scanStartInd = 5;
   int scanEndInd = cloudSize - 6;
 
+  //用于记录距离过远的点的数量，作为特征的一部分。
   int thDistanceFaraway_fea = 0;
-
+  //遍历从第6个点到倒数第6个点的点云数据。
   for (int i = 5; i < cloudSize - 5; i ++ ) {
-
+    //计算坐标差值
     float diffX = 0;
     float diffY = 0;
     float diffZ = 0;
-
+    
+    //计算点的距离：通过sqrt函数计算点到原点的距离。 _laserCloud是去除非法点后的点云
     float dis = sqrt(_laserCloud->points[i].x * _laserCloud->points[i].x +
                      _laserCloud->points[i].y * _laserCloud->points[i].y +
                      _laserCloud->points[i].z * _laserCloud->points[i].z);
-
+    //定义了三个Eigen::Vector3d对象，分别存储当前点、前一个点和后一个点的(x, y, z)坐标。
     Eigen::Vector3d pt_last(_laserCloud->points[i-1].x, _laserCloud->points[i-1].y, _laserCloud->points[i-1].z);
     Eigen::Vector3d pt_cur(_laserCloud->points[i].x, _laserCloud->points[i].y, _laserCloud->points[i].z);
     Eigen::Vector3d pt_next(_laserCloud->points[i+1].x, _laserCloud->points[i+1].y, _laserCloud->points[i+1].z);
-
+    //计算当前点与前后两个点的夹角余弦值。余弦值越大才越有可能是平坦表面点？
     double angle_last = (pt_last-pt_cur).dot(pt_cur) / ((pt_last-pt_cur).norm()*pt_cur.norm());
     double angle_next = (pt_next-pt_cur).dot(pt_cur) / ((pt_next-pt_cur).norm()*pt_cur.norm());
- 
+
+    //根据距离和夹角值判断曲率点的数量，设置thNumCurvSize的值为2或3，以便后续使用。
+    //   &&优先级大于||
     if (dis > thDistanceFaraway || (fabs(angle_last) > 0.966 && fabs(angle_next) > 0.966)) {
       thNumCurvSize = 2;
     } else {
@@ -168,37 +270,51 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     }
 
     if(fabs(angle_last) > 0.966 && fabs(angle_next) > 0.966) {
+      //如果当前点的夹角余弦值较大，将对应的cloudAngle标志设置为1：平坦表面点。
       cloudAngle[i] = 1;
     }
 
+    //计算特征值：通过对当前点前后若干个点的坐标差值，计算得到该点的曲率值、深度、反射强度等特征
+    //初始化变量diffR，用于存储特征值中的反射强度信息。 反射强度信息的意义？
     float diffR = -2 * thNumCurvSize * _laserCloud->points[i].intensity;
+    //循环计算特征值：通过对当前点前后若干个点的坐标差值，计算得到该点的曲率值和反射强度。
     for (int j = 1; j <= thNumCurvSize; ++j) {
+      //这里还没有算差值，只是把坐标值累计起来
+      //在每次循环中，累加了坐标的差值diffX、diffY、diffZ以及反射强度差值diffR。
       diffX += _laserCloud->points[i - j].x + _laserCloud->points[i + j].x;
       diffY += _laserCloud->points[i - j].y + _laserCloud->points[i + j].y;
       diffZ += _laserCloud->points[i - j].z + _laserCloud->points[i + j].z;
       diffR += _laserCloud->points[i - j].intensity + _laserCloud->points[i + j].intensity;
     }
+    //这里才一起算了差值
+    //修正之前累加的坐标差值，减去当前点坐标的2倍，用于计算曲率。
     diffX -= 2 * thNumCurvSize * _laserCloud->points[i].x;
     diffY -= 2 * thNumCurvSize * _laserCloud->points[i].y;
     diffZ -= 2 * thNumCurvSize * _laserCloud->points[i].z;
 
-    cloudDepth[i] = dis;
-    cloudCurvature[i] = diffX * diffX + diffY * diffY + diffZ * diffZ;// / (2 * thNumCurvSize * dis + 1e-3);
-    cloudSortInd[i] = i;
-    cloudReflect[i] = diffR;
-    reflectSortInd[i] = i;
+    //将特征值存储：将计算得到的特征值存储在对应的数组cloudCurvature、cloudDepth、cloudSortInd、cloudReflect和reflectSortInd中。
+    cloudDepth[i] = dis;//存储深度信息
+    cloudCurvature[i] = diffX * diffX + diffY * diffY + diffZ * diffZ;// / (2 * thNumCurvSize * dis + 1e-3); 存储曲率信息
+    cloudSortInd[i] = i;// 存储排序索引，用于后续对曲率和反射强度进行排序
+    cloudReflect[i] = diffR;// 存储反射强度信息
+    reflectSortInd[i] = i;// 存储反射强度排序索引，用于后续对反射强度进行排序
 
-  }
+  }//结束遍历从第6个点到倒数第6个点的点云数据。
 
+  //循环遍历thPartNum个区域：该部分代码对每个区域内的点进行特征标记和提取。
   for (int j = 0; j < thPartNum; j++) {
+    //在这个循环中，首先计算每个区域的起始点索引sp和结束点索引ep，通过将整个点云分成thPartNum个区域，以便逐个区域处理点云数据。
+    //scanStarInd是点云起始索引6
     int sp = scanStartInd + (scanEndInd - scanStartInd) * j / thPartNum;
     int ep = scanStartInd + (scanEndInd - scanStartInd) * (j + 1) / thPartNum - 1;
 
+    //对区域内的点进行冒泡排序，分别根据曲率值和反射强度从小到大进行排序，以便后续特征提取过程中选择合适的特征点。
     // sort the curvatures from small to large
     for (int k = sp + 1; k <= ep; k++) {
       for (int l = k; l >= sp + 1; l--) {
         if (cloudCurvature[cloudSortInd[l]] <
             cloudCurvature[cloudSortInd[l - 1]]) {
+          //对存储索引的vector排序
           int temp = cloudSortInd[l - 1];
           cloudSortInd[l - 1] = cloudSortInd[l];
           cloudSortInd[l] = temp;
@@ -218,28 +334,35 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       }
     }
 
+    //记录选取的特征点数量：用于记录在当前区域内已经选取的最平坦点的数量和最尖锐点的数量。
     int smallestPickedNum = 1;
     int sharpestPickedNum = 1;
+    //特征点标记和提取：根据一定的条件，对当前区域内的点进行特征标记和提取。
     for (int k = sp; k <= ep; k++) {
+      //从曲率值小的索引开始遍历本区域
       int ind = cloudSortInd[k];
-
+      //如果该点已经被标记为特征点，则跳过
       if (CloudFeatureFlag[ind] != 0) continue;
-
+      
+      // 如果当前点的曲率值小于一定阈值，则认为该点是平坦区域的一部分
       if (cloudCurvature[ind] < thFlatThreshold * cloudDepth[ind] * thFlatThreshold * cloudDepth[ind]) {
-        
+        //将该点标记为平坦特征点
         CloudFeatureFlag[ind] = 3;
 
+        //向前和向后查找一定数量的点，如果这些点的坐标变化不大，则将这些点也标记为平坦特征点
         for (int l = 1; l <= thNumCurvSize; l++) {
+          //前后点之间的坐标差值
           float diffX = _laserCloud->points[ind + l].x -
                         _laserCloud->points[ind + l - 1].x;
           float diffY = _laserCloud->points[ind + l].y -
                         _laserCloud->points[ind + l - 1].y;
           float diffZ = _laserCloud->points[ind + l].z -
                         _laserCloud->points[ind + l - 1].z;
+          // 如果坐标变化过大或者当前点的深度超过一定阈值，则停止向前查找
           if (diffX * diffX + diffY * diffY + diffZ * diffZ > 0.02 || cloudDepth[ind] > thDistanceFaraway) {
             break;
           }
-
+          // 将这些点也标记为平坦特征点
           CloudFeatureFlag[ind + l] = 1;
         }
         for (int l = -1; l >= -thNumCurvSize; l--) {
@@ -256,20 +379,24 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           CloudFeatureFlag[ind + l] = 1;
         }
       }
-    }
+    }//在这个循环中，对当前区域内的点进行遍历，判断是否满足平坦特征的条件。如果满足条件，将该点及其周围的若干点标记为平坦特征点。这里使用了一定的坐标变化阈值和深度阈值来控制点的选择。
     
     for (int k = sp; k <= ep; k++) {
+      //从曲率值小的索引开始遍历本区域
       int ind = cloudSortInd[k];
+      //如果该点是最平坦的点，并且在规定的最大平坦点数量内，则将其标记为普通特征点
       if(((CloudFeatureFlag[ind] == 3) && (smallestPickedNum <= thNumFlat)) || 
           ((CloudFeatureFlag[ind] == 3) && (cloudDepth[ind] > thDistanceFaraway)) ||
           cloudAngle[ind] == 1){
         smallestPickedNum ++;
         CloudFeatureFlag[ind] = 2;
+        // 如果该点的深度超过一定阈值，则增加计数器
         if(cloudDepth[ind] > thDistanceFaraway) {
           thDistanceFaraway_fea++;
         }
       }
 
+      // 如果该点是最尖锐的点，并且在规定的最大尖锐点数量内，并且反射强度满足一定条件，则将其标记为特殊特征点？？
       int idx = reflectSortInd[k];
       if(cloudCurvature[idx] < 0.7 * thFlatThreshold * cloudDepth[idx] * thFlatThreshold * cloudDepth[idx]
          && sharpestPickedNum <= 3 && cloudReflect[idx] > 20.0){
@@ -278,9 +405,10 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       }
     }
     
-  }
+  }//结束循环遍历thPartNum个区域：该部分代码对每个区域内的点进行特征标记和提取。
 
   //---------------------------------------- line feature where surfaces meet -------------------------------------
+  /*线特征提取（line feature where surfaces meet）：代码进一步处理点，以确定表面相遇处的断点。它查找左右曲率明显不同的点，并计算相邻点法线之间的夹角。如果角度低于阈值，则将该点标记为断点。*/
   for (int i = 5; i < cloudSize - 5; i += count_num ) {
     float depth = sqrt(_laserCloud->points[i].x * _laserCloud->points[i].x +
                        _laserCloud->points[i].y * _laserCloud->points[i].y +
@@ -391,6 +519,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   }
 
   //--------------------------------------------------- break points ---------------------------------------------
+  /*角点特征提取（break points）：代码通过比较前后方向上相邻点之间的距离差异来识别尖锐的拐角。如果差异超过阈值，则将该点视为尖锐拐角。*/
   for(int i = 5; i < cloudSize - 5; i ++){
     float diff_left[2];
     float diff_right[2];
