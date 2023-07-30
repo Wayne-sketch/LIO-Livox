@@ -19,8 +19,9 @@ LidarFeatureExtractor::LidarFeatureExtractor(int n_scans,int NumCurvSize,float D
                                               thNumFlat(NumFlat),//一个区域内最大允许的的平面点数量，也有可能选出来的平面点数量比thNumFlat大
                                               thPartNum(PartNum),
                                               thFlatThreshold(FlatThreshold),
-                                              thBreakCornerDis(BreakCornerDis),
-                                              thLidarNearestDis(LidarNearestDis){
+                                              thBreakCornerDis(BreakCornerDis),//判断是否为break point的阈值
+                                              thLidarNearestDis(LidarNearestDis)//意义上是一个距离
+                                              {
   //为vlines、vcorner和vsurf这三个成员变量分配内存空间。
   //原始点云数据，vector<点云指针>    vlines.resize(N_SCANS) 将 vlines 初始化为包含 N_SCANS 个元素的空的vector。
   //ctx: PointType - pcl::PointXYZINormal 保存每条线的原始数据，每个元素都是点云指针，代表一条lidar线上的点云
@@ -555,54 +556,66 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
                        _laserCloud->points[i].z * _laserCloud->points[i].z);
 
     for(int count = 1; count < 3; count++ ){
+      //diff_right[0]存储后一个点到当前点的距离差值，diff_right[1]存储往后第二个点到当前点的距离差值
       float diffX1 = _laserCloud->points[i + count].x - _laserCloud->points[i].x;
       float diffY1 = _laserCloud->points[i + count].y - _laserCloud->points[i].y;
       float diffZ1 = _laserCloud->points[i + count].z - _laserCloud->points[i].z;
       diff_right[count - 1] = sqrt(diffX1 * diffX1 + diffY1 * diffY1 + diffZ1 * diffZ1);
-
+      //diff_left[0]存储前一个点到当前点的距离差值，diff_left[1]存储往前第二个点到当前点的距离差值
       float diffX2 = _laserCloud->points[i - count].x - _laserCloud->points[i].x;
       float diffY2 = _laserCloud->points[i - count].y - _laserCloud->points[i].y;
       float diffZ2 = _laserCloud->points[i - count].z - _laserCloud->points[i].z;
       diff_left[count - 1] = sqrt(diffX2 * diffX2 + diffY2 * diffY2 + diffZ2 * diffZ2);
     }
-
+    //depth_right存储后一个点到原点的距离，即后一个点的深度
     float depth_right = sqrt(_laserCloud->points[i + 1].x * _laserCloud->points[i + 1].x +
                              _laserCloud->points[i + 1].y * _laserCloud->points[i + 1].y +
                              _laserCloud->points[i + 1].z * _laserCloud->points[i + 1].z);
+    //depth_left存储前一个点到原点的距离，即前一个点的深度
     float depth_left = sqrt(_laserCloud->points[i - 1].x * _laserCloud->points[i - 1].x +
                             _laserCloud->points[i - 1].y * _laserCloud->points[i - 1].y +
                             _laserCloud->points[i - 1].z * _laserCloud->points[i - 1].z);
     
+    //如果当前点与前后两个点之间的距离差值的绝对值大于阈值 thBreakCornerDis，则进入条件块，表示可能出现了突变点。
     if(fabs(diff_right[0] - diff_left[0]) > thBreakCornerDis){
+      //如果当前点与后一个点之间的距离大于当前点与前一个点之间的距离，说明当前点可能是一个左侧表面的一部分，需要进行左侧表面的验证
       if(diff_right[0] > diff_left[0]){
-
+        //计算左侧表面的法向量 surf_vector，使用当前点与左侧相邻点的差值向量。
         Eigen::Vector3d surf_vector = Eigen::Vector3d(_laserCloud->points[i - 1].x - _laserCloud->points[i].x,
                                                       _laserCloud->points[i - 1].y - _laserCloud->points[i].y,
                                                       _laserCloud->points[i - 1].z - _laserCloud->points[i].z);
+        //表示当前点的激光雷达坐标
         Eigen::Vector3d lidar_vector = Eigen::Vector3d(_laserCloud->points[i].x,
                                                        _laserCloud->points[i].y,
                                                        _laserCloud->points[i].z);
+        //计算左侧表面的长度，即法向量的模？？？
         double left_surf_dis = surf_vector.norm();
         //calculate the angle between the laser direction and the surface
         double cc = fabs( surf_vector.dot(lidar_vector) / (surf_vector.norm()*lidar_vector.norm()) );
 
+        //用于存储左侧相邻点的点云容器
         std::vector<PointType> left_list;
+        //用于记录左侧相邻点之间的最小距离，初始值设定为一个较大值
         double min_dis = 10000;
+        //用于记录左侧相邻点之间的最大距离，初始值设定为0
         double max_dis = 0;
+        //循环遍历左侧的3个相邻点，包括当前点在内，一共4个点，以构成一个左侧窗口
         for(int j = 0; j < 4; j++){   //TODO: change the plane window size and add thin rod support
           left_list.push_back(_laserCloud->points[i - j]);
           Eigen::Vector3d temp_vector = Eigen::Vector3d(_laserCloud->points[i - j].x - _laserCloud->points[i - j - 1].x,
                                                         _laserCloud->points[i - j].y - _laserCloud->points[i - j - 1].y,
                                                         _laserCloud->points[i - j].z - _laserCloud->points[i - j - 1].z);
-
+          //这一句的作用是不算左侧第三个点到左侧第四个点的距离，但是前面把左侧第三个点放入了left_list，用于判断左侧是否为平面
           if(j == 3) break;
           double temp_dis = temp_vector.norm();
+          //更新相邻点间的最大和最小距离
           if(temp_dis < min_dis) min_dis = temp_dis;
           if(temp_dis > max_dis) max_dis = temp_dis;
         }
         bool left_is_plane = plane_judge(left_list,100);
 
         if( cc < 0.95 ){//(max_dis < 2*min_dis) && left_surf_dis < 0.05 * depth  && left_is_plane &&
+        //如果右侧点的深度大于左侧点的深度，将当前点标记为 100，表示为突变点break point。如果 depth_right 等于0（即右侧点没有深度信息），同样将当前点标记为 100。
           if(depth_right > depth_left){
             CloudFeatureFlag[i] = 100;
           }
@@ -611,7 +624,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           }
         }
       }
-      else{
+      else{//右侧的同样的验证
 
         Eigen::Vector3d surf_vector = Eigen::Vector3d(_laserCloud->points[i + 1].x - _laserCloud->points[i].x,
                                                       _laserCloud->points[i + 1].y - _laserCloud->points[i].y,
@@ -638,7 +651,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           if(temp_dis > max_dis) max_dis = temp_dis;
         }
         bool right_is_plane = plane_judge(right_list,100);
-
+        //角度大于15°？？？？
         if( cc < 0.95){ //right_is_plane  && (max_dis < 2*min_dis) && right_surf_dis < 0.05 * depth &&
 
           if(depth_right < depth_left){
@@ -652,32 +665,37 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     }
 
     // break points select
+    //如果当前索引i处的CloudFeatureFlag值为100，表示这可能是一个断点（break point）
     if(CloudFeatureFlag[i] == 100){
       debugnum2++;
-      std::vector<Eigen::Vector3d> front_norms;
-      Eigen::Vector3d norm_front(0,0,0);
-      Eigen::Vector3d norm_back(0,0,0);
+      std::vector<Eigen::Vector3d> front_norms;//存储左侧点到当前点归一化后的坐标差
+      Eigen::Vector3d norm_front(0,0,0);//存储左侧点到当前点归一化后的坐标差
+      Eigen::Vector3d norm_back(0,0,0);//存储右侧点到当前点归一化后的坐标差
 
       for(int k = 1;k<4;k++){
-
+        //计算左侧点的深度
         float temp_depth = sqrt(_laserCloud->points[i - k].x * _laserCloud->points[i - k].x +
                         _laserCloud->points[i - k].y * _laserCloud->points[i - k].y +
                         _laserCloud->points[i - k].z * _laserCloud->points[i - k].z);
-
+        //如果深度小于1，那么跳过本次循环，继续算下一个左侧点
         if(temp_depth < 1){
           continue;
         }
-
+        //左侧点到当前点的坐标差
         Eigen::Vector3d tmp = Eigen::Vector3d(_laserCloud->points[i - k].x - _laserCloud->points[i].x,
                                               _laserCloud->points[i - k].y - _laserCloud->points[i].y,
                                               _laserCloud->points[i - k].z - _laserCloud->points[i].z);
+        //归一化
         tmp.normalize();
+        //存入front_norms
         front_norms.push_back(tmp);
+        //左侧四个点加权平均求到当前点的坐标差
         norm_front += (k/6.0)* tmp;
       }
+      //存储右侧点到当前点归一化后的坐标差
       std::vector<Eigen::Vector3d> back_norms;
       for(int k = 1;k<4;k++){
-
+        //这里代码是不是有问题？算的是左侧的？？？？
         float temp_depth = sqrt(_laserCloud->points[i - k].x * _laserCloud->points[i - k].x +
                         _laserCloud->points[i - k].y * _laserCloud->points[i - k].y +
                         _laserCloud->points[i - k].z * _laserCloud->points[i - k].z);
@@ -693,55 +711,73 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
         back_norms.push_back(tmp);
         norm_back += (k/6.0)* tmp;
       }
+      //求当前点到左侧四点加权平均的向量 和 求当前点到右侧四点加权平均的向量的夹角余弦值
       double cc = fabs( norm_front.dot(norm_back) / (norm_front.norm()*norm_back.norm()) );
+      //如果夹角大于15° 小于165°  有突起
       if(cc < 0.95){
         debugnum3++;
       }else{
+        //否则就是平面点？？？
         CloudFeatureFlag[i] = 101;
       }
 
     }
 
-  }
+  }//结束角点特征提取对点云的遍历
 
   pcl::PointCloud<PointType>::Ptr laserCloudCorner(new pcl::PointCloud<PointType>());
   pcl::PointCloud<PointType> cornerPointsSharp;
 
   std::vector<int> pointsLessSharp_ori;
 
+  //记录平面特征点的数量
   int num_surf = 0;
+  //记录角点特征点的数量
   int num_corner = 0;
 
   //push_back feature
-
+  //排除前五个点和后五个点遍历点云
   for(int i = 5; i < cloudSize - 5; i ++){
-
+    //计算当前点深度平方
     float dis = _laserCloud->points[i].x * _laserCloud->points[i].x
             + _laserCloud->points[i].y * _laserCloud->points[i].y
             + _laserCloud->points[i].z * _laserCloud->points[i].z;
-
+    //比较距离
     if(dis < thLidarNearestDis*thLidarNearestDis) continue;
-
+    
+    //提取平面特征点 存索引，去除非法点后点云的索引
     if(CloudFeatureFlag[i] == 2){
       pointsLessFlat.push_back(i);
       num_surf++;
       continue;
     }
-
+    //提取角点特征点 为什么要操作两次？？？和内存有关？？？
     if(CloudFeatureFlag[i] == 100 || CloudFeatureFlag[i] == 150){ //
+      //存索引 去除非法点后点云的索引
       pointsLessSharp_ori.push_back(i);
       laserCloudCorner->push_back(_laserCloud->points[i]);
     }
 
   }
-
+  //再遍历一次选中的角点特征点
   for(int i = 0; i < laserCloudCorner->points.size();i++){
+      //存索引 去除非法点后点云的索引
       pointsLessSharp.push_back(pointsLessSharp_ori[i]);
       num_corner++;
   }
 
 }
 
+
+/*
+*msg: 传感器采集的点云消息，类型为livox_ros_driver::CustomMsgConstPtr
+*laserCloud: 输入的原始点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
+*laserConerFeature: 输出的角点特征点的点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
+*laserSurfFeature: 输出的平面特征点的点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
+*laserNonFeature: 输出的非特征点的点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
+*msg_seg: 输出的点云分割结果，类型为sensor_msgs::PointCloud2，表示点云的格式和数据
+*Used_Line: 设定的要使用的最大线数，类型为int，用于限制线数的范围，超过该范围的线将被忽略。如1，代表只使用第一条扫描线
+*/
 void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::CustomMsgConstPtr &msg,
                                                         pcl::PointCloud<PointType>::Ptr& laserCloud,
                                                         pcl::PointCloud<PointType>::Ptr& laserConerFeature,
@@ -749,34 +785,46 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
                                                         pcl::PointCloud<PointType>::Ptr& laserNonFeature,
                                                         sensor_msgs::PointCloud2 &msg_seg,
                                                         const int Used_Line){
+  //清空点云
   laserCloud->clear();
   laserConerFeature->clear();
   laserSurfFeature->clear();
   laserCloud->clear();
+  //预留点云空间
   laserCloud->reserve(15000*N_SCANS);
   for(auto & ptr : vlines){
     ptr->clear();
   }
+  //清空角点特征点
   for(auto & v : vcorner){
     v.clear();
   }
+  //清空平面特征点
   for(auto & v : vsurf){
     v.clear();
   }
 
+  //获取输入点云点的数量
   int dnum = msg->points.size();
 
+  //动态分配内存，存储点云点ID？？？
   int *idtrans = (int*)calloc(dnum, sizeof(int));
+  //动态分配内存，用于存储点云的(x, y, z, intensity)数据
   float *data=(float*)calloc(dnum*4,sizeof(float));
+  //？？？？
   int point_num = 0;
 
+  //获取消息中最后一个点的时间偏移，并转换成秒。
   double timeSpan = ros::Time().fromNSec(msg->points.back().offset_time).toSec();
   PointType point;
   for(const auto& p : msg->points){
-
+    //获取当前点所在的线数，估计从0开始的
     int line_num = (int)p.line;
+    //如果当前点所在的线数大于设定要使用的的最大线数(Used_Line)，则跳过该点，继续下一个点
     if(line_num > Used_Line-1) continue;
+    //如果当前点的x坐标小于0.01，说明该点无效，跳过该点，继续下一个点 为什么无效？？？
     if(p.x < 0.01) continue;
+    //如果当前点的x、y或z坐标无限大或无限小，说明该点无效，跳过该点，继续下一个点
     if (!pcl_isfinite(p.x) ||
         !pcl_isfinite(p.y) ||
         !pcl_isfinite(p.z)) {
@@ -786,6 +834,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
     point.y = p.y;
     point.z = p.z;
     point.intensity = p.reflectivity;
+    //将当前点的offset_time转换成秒，并除以timeSpan，存储到point的normal_x字段中，将当前点所在的线数转换成浮点数，并存储到point的normal_y字段中
     point.normal_x = ros::Time().fromNSec(p.offset_time).toSec() /timeSpan;
     point.normal_y = _int_as_float(line_num);
     laserCloud->push_back(point);
@@ -868,27 +917,34 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
   laserSurfFeature->clear();
   laserCloud->clear();
   laserCloud->reserve(15000*N_SCANS);
+  //vlines保存每条扫面线上的点云，遍历每条扫描线
   for(auto & ptr : vlines){
     ptr->clear();
   }
+  //清空角点特征点
   for(auto & v : vcorner){
     v.clear();
   }
+  //清空平面特征点
   for(auto & v : vsurf){
     v.clear();
   }
 
+  //获取输入点云点的数量
   int dnum = msg->points.size();
-
+  //动态分配内存，存储点云点ID？？？
   int *idtrans = (int*)calloc(dnum, sizeof(int));
+  //动态分配内存，用于存储点云的(x, y, z, intensity)数据
   float *data=(float*)calloc(dnum*4,sizeof(float));
-  int point_num = 0;
-
+ //？？？？
+ int point_num = 0;
+  //获取消息中最后一个点的时间偏移，并转换成秒。
   double timeSpan = ros::Time().fromNSec(msg->points.back().offset_time).toSec();
   PointType point;
   for(const auto& p : msg->points){
-
+    //获取当前点所在的线数
     int line_num = (int)p.line;
+    //如果当前点所在的线数大于设定要使用的的最大线数(Used_Line)，则跳过该点，继续下一个点
     if(line_num > Used_Line-1) continue;
     if(p.x < 0.01) continue;
     if (!pcl_isfinite(p.x) ||

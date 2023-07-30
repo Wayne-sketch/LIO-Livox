@@ -121,12 +121,12 @@ private:
     /** \brief store original points of each line */
     std::vector<pcl::PointCloud<PointType>::Ptr> vlines;
 
-    //ctx: 保存每条线的角点的索引，第一层vector每个元素代表每条线，第二层vector每个元素代表在同一条线上的角点索引
+    //ctx: 保存每条线的角点特征点的索引，第一层vector每个元素代表每条线，第二层vector每个元素代表在同一条线上的角点索引
     //ctx: 索引应该是点云里对应的索引
     /** \brief store corner feature index of each line */
     std::vector<std::vector<int>> vcorner;
 
-    //ctx: 同理，保存的是surf特征点/描述子？
+    //ctx: 同理，保存的是每条扫描线上平面特征点的索引
     /** \brief store surf feature index of each line */
     std::vector<std::vector<int>> vsurf;
 
