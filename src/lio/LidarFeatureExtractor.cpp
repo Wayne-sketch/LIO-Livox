@@ -6,7 +6,7 @@
 2、NumCurvSize: int，表示曲率点的数量 ？
 3、DistanceFaraway: float，表示远处的距离。
 4、NumFlat: int，表示平坦点的数量。
-5、PartNum: int，表示分割点的数量。
+5、PartNum: int，表示对点云分割区域的数量。
 6、FlatThreshold: float，表示平坦度的阈值。
 7、BreakCornerDis: float，表示打破角点的距离。
 8、LidarNearestDis: float，表示激光雷达最近点的距离。
@@ -14,9 +14,9 @@
 LidarFeatureExtractor::LidarFeatureExtractor(int n_scans,int NumCurvSize,float DistanceFaraway,int NumFlat,
                                              int PartNum,float FlatThreshold,float BreakCornerDis,float LidarNearestDis,float KdTreeCornerOutlierDis)
                                              :N_SCANS(n_scans),//lidar扫描线数
-                                              thNumCurvSize(NumCurvSize),
-                                              thDistanceFaraway(DistanceFaraway),
-                                              thNumFlat(NumFlat),//最大平坦点数量
+                                              thNumCurvSize(NumCurvSize),//thNumCurvSize代表计算曲率时，被计算点两端要分别采用几个点
+                                              thDistanceFaraway(DistanceFaraway),//判断是否为远点的阈值
+                                              thNumFlat(NumFlat),//一个区域内最大允许的的平面点数量，也有可能选出来的平面点数量比thNumFlat大
                                               thPartNum(PartNum),
                                               thFlatThreshold(FlatThreshold),
                                               thBreakCornerDis(BreakCornerDis),
@@ -154,10 +154,14 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
                                                 std::vector<int>& pointsLessSharp,
                                                 std::vector<int>& pointsLessFlat){
   /*特征标志：使用固定大小的数组CloudFeatureFlag来存储每个点的标志。标志的值用于将每个点归类如下：
-  0：未处理的点（初始值为0）。
-  1：与平坦表面相关联的点。
-  2：与尖锐拐角相关联的点。
-  3：被视为表面相遇处的断点。*/
+  0：未处理的点（初始值为0）
+  1：表示该点前后2or3个点中有3；
+  2：曲率最小的几个被标为3的点，或被标为3的远点，或点与前后点的角度小于15°的点；最终存为平面点
+  3：所有曲率小于阈值的点，注意：一部分3点后面会变成2点；
+  300：强度变化大于阈值且曲率很小的3个点
+  150：两个面的夹角构成的边缘点
+  100：断点，左右相邻点距离差超过1m,扫描线与邻点向量夹角大于18 100和150的为角点*/
+
   //用于存储每个点的特征标志的数组，初始时都设置为0。
   int CloudFeatureFlag[20000];
 
@@ -176,7 +180,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   //用于存储点云点的索引，将会根据反射强度从小到大进行排序。
   int reflectSortInd[20000];
 
-  //用于存储每个点的角度标志的数组。？
+  //如果点与前后点的角度均小于15°，将该点标志置为1
   int cloudAngle[20000];
 
   //给传进来的点云指针创建一个引用
@@ -185,7 +189,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   int cloudSize = laserCloudIn->points.size();
   //临时变量point 一个点
   PointType point;
-  //定义一个新的点云对象_laserCloud，用于存储去除非法点后的点云
+  //定义一个新的点云对象_laserCloud，用于存储去除非法点后的点云，非法点指的是三位坐标含有NaN Inf的值，下面马上就能看出来
   //new出一个点云，()的意思是调用默认构造函数，返回一个点云指针，作为pcl::PointCloud<PointType>::Ptr类构造函数的参数 猜测pcl::PointCloud<PointType>::Ptr类是智能指针类
   pcl::PointCloud<PointType>::Ptr _laserCloud(new pcl::PointCloud<PointType>());
   //预先分配空间，以避免在添加点时不断重新分配内存。
@@ -197,7 +201,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     point.y = laserCloudIn->points[i].y;
     point.z = laserCloudIn->points[i].z;
 //条件编译，如果定义了UNDISTORT宏，则执行#ifdef UNDISTORT和#endif之间的代码，否则执行#else和#endif之间的代码。
-//如果UNDISTORT被定义，则获取点云中第i个点的法线normal_x（前提是点云中包含了法线信息）。如果未定义UNDISTORT，则将点的法线normal_x设置为1.0（默认值）。
+//如果UNDISTORT被定义，则获取点云中第i个点的法线normal_x。如果未定义UNDISTORT，则将点的法线normal_x设置为1.0（默认值）。
 #ifdef UNDISTORT
     point.normal_x = laserCloudIn.points[i].normal_x;
 #else
@@ -218,10 +222,10 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     CloudFeatureFlag[i] = 0;
   }//点云中的点遍历完成一次
 
-  //点云中的点遍历完成后，更新cloudSize，表示去除非法点后的点云大小。
+  //点云中的点遍历完成后，更新cloudSize，表示去除非法点后的点云大小。，后面点云大小用更新后的，点云就用去掉非法点后的点云
   cloudSize = _laserCloud->size();
 
-  //定义并初始化用于调试的计数器变量。
+  //定义并初始化用于调试的计数器变量。作用后面会看到，这里需要标一下？
   int debugnum1 = 0;
   int debugnum2 = 0;
   int debugnum3 = 0;
@@ -230,17 +234,26 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
 
   //用于控制点云遍历时的步长，默认为1。
   int count_num = 1;
-  //用于标记是否检测到左右表面。
+  //用于标记一个点左右侧是否是平面
   bool left_surf_flag = false;
   bool right_surf_flag = false;
 
   //---------------------------------------- surf feature extract ---------------------------------------------
   /*表面特征提取（surf feature extract）：代码迭代遍历点云以检测平坦表面点。它计算每个点及其邻近点的曲率，以确定是否属于平坦表面。该算法考虑点的深度和邻近点之间的角度来分类表面点。*/
   //定义了点云处理的起始和结束索引，排除了前5个点和后5个点。
+
+  /*
+  *
+  *
+  * 对于平面点的特征有四种标志为1，2，3，300，平面特征提取把一条扫描线分成了100段进行提取，最终选取标志位为2的点为平面点
+  * 
+  * 
+  * 
+  * */
   int scanStartInd = 5;
   int scanEndInd = cloudSize - 6;
 
-  //用于记录距离过远的点的数量，作为特征的一部分。
+  //用于记录距离过远的点的数量，作为特征的一部分。？？
   int thDistanceFaraway_fea = 0;
   //遍历从第6个点到倒数第6个点的点云数据。
   for (int i = 5; i < cloudSize - 5; i ++ ) {
@@ -249,7 +262,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     float diffY = 0;
     float diffZ = 0;
     
-    //计算点的距离：通过sqrt函数计算点到原点的距离。 _laserCloud是去除非法点后的点云
+    //计算点的距离（深度）：通过sqrt函数计算点到原点的距离。 _laserCloud是去除非法点后的点云
     float dis = sqrt(_laserCloud->points[i].x * _laserCloud->points[i].x +
                      _laserCloud->points[i].y * _laserCloud->points[i].y +
                      _laserCloud->points[i].z * _laserCloud->points[i].z);
@@ -257,11 +270,11 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     Eigen::Vector3d pt_last(_laserCloud->points[i-1].x, _laserCloud->points[i-1].y, _laserCloud->points[i-1].z);
     Eigen::Vector3d pt_cur(_laserCloud->points[i].x, _laserCloud->points[i].y, _laserCloud->points[i].z);
     Eigen::Vector3d pt_next(_laserCloud->points[i+1].x, _laserCloud->points[i+1].y, _laserCloud->points[i+1].z);
-    //计算当前点与前后两个点的夹角余弦值。余弦值越大才越有可能是平坦表面点？
+    //计算当前点与前后两个点的夹角余弦值。余弦值越大才越有可能是平坦表面点？可是pt_cur并不是点的法向量
     double angle_last = (pt_last-pt_cur).dot(pt_cur) / ((pt_last-pt_cur).norm()*pt_cur.norm());
     double angle_next = (pt_next-pt_cur).dot(pt_cur) / ((pt_next-pt_cur).norm()*pt_cur.norm());
 
-    //根据距离和夹角值判断曲率点的数量，设置thNumCurvSize的值为2或3，以便后续使用。
+    //根据距离和夹角值判断曲率点的数量，设置thNumCurvSize的值为2或3，thNumCurvSize代表计算曲率时，被计算点两端要分别采用几个点，为什么要这样的策略来取点数？
     //   &&优先级大于||
     if (dis > thDistanceFaraway || (fabs(angle_last) > 0.966 && fabs(angle_next) > 0.966)) {
       thNumCurvSize = 2;
@@ -270,7 +283,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     }
 
     if(fabs(angle_last) > 0.966 && fabs(angle_next) > 0.966) {
-      //如果当前点的夹角余弦值较大，将对应的cloudAngle标志设置为1：平坦表面点。
+      //如果当前点的夹角余弦值的绝对值较大，将对应的cloudAngle标志设置为1。
       cloudAngle[i] = 1;
     }
 
@@ -304,8 +317,9 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   //循环遍历thPartNum个区域：该部分代码对每个区域内的点进行特征标记和提取。
   for (int j = 0; j < thPartNum; j++) {
     //在这个循环中，首先计算每个区域的起始点索引sp和结束点索引ep，通过将整个点云分成thPartNum个区域，以便逐个区域处理点云数据。
-    //scanStarInd是点云起始索引6
+    //scanStarInd是从第6个点云开始
     int sp = scanStartInd + (scanEndInd - scanStartInd) * j / thPartNum;
+    //-1是因为要把下一段的开始点去掉，但是会导致没有算最后一个点？
     int ep = scanStartInd + (scanEndInd - scanStartInd) * (j + 1) / thPartNum - 1;
 
     //对区域内的点进行冒泡排序，分别根据曲率值和反射强度从小到大进行排序，以便后续特征提取过程中选择合适的特征点。
@@ -314,7 +328,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       for (int l = k; l >= sp + 1; l--) {
         if (cloudCurvature[cloudSortInd[l]] <
             cloudCurvature[cloudSortInd[l - 1]]) {
-          //对存储索引的vector排序
+          //对存储索引的vector排序，注意只对索引排序而不是对曲率或反射强度排序
           int temp = cloudSortInd[l - 1];
           cloudSortInd[l - 1] = cloudSortInd[l];
           cloudSortInd[l] = temp;
@@ -346,10 +360,10 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       
       // 如果当前点的曲率值小于一定阈值，则认为该点是平坦区域的一部分
       if (cloudCurvature[ind] < thFlatThreshold * cloudDepth[ind] * thFlatThreshold * cloudDepth[ind]) {
-        //将该点标记为平坦特征点
+        //将该点标记为3
         CloudFeatureFlag[ind] = 3;
 
-        //向前和向后查找一定数量的点，如果这些点的坐标变化不大，则将这些点也标记为平坦特征点
+        //向后查找一定数量的点，如果这些点的坐标变化不大，则将这些点也标记为平坦特征点（待定）
         for (int l = 1; l <= thNumCurvSize; l++) {
           //前后点之间的坐标差值
           float diffX = _laserCloud->points[ind + l].x -
@@ -362,9 +376,10 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           if (diffX * diffX + diffY * diffY + diffZ * diffZ > 0.02 || cloudDepth[ind] > thDistanceFaraway) {
             break;
           }
-          // 将这些点也标记为平坦特征点
+          // 标记为3的点后面的点标记为1
           CloudFeatureFlag[ind + l] = 1;
         }
+        //向前查找一定数量的点，如果这些点的坐标变化不大，则将这些点也标记为平坦特征点（待定）
         for (int l = -1; l >= -thNumCurvSize; l--) {
           float diffX = _laserCloud->points[ind + l].x -
                         _laserCloud->points[ind + l + 1].x;
@@ -379,12 +394,13 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           CloudFeatureFlag[ind + l] = 1;
         }
       }
-    }//在这个循环中，对当前区域内的点进行遍历，判断是否满足平坦特征的条件。如果满足条件，将该点及其周围的若干点标记为平坦特征点。这里使用了一定的坐标变化阈值和深度阈值来控制点的选择。
+    }//在这个循环中，对当前区域内的点进行遍历，判断是否满足平坦特征的条件。如果满足条件，将该点及其周围的若干点标记为平坦特征点（待定）。这里使用了一定的坐标变化阈值和深度阈值来控制点的选择。
     
     for (int k = sp; k <= ep; k++) {
       //从曲率值小的索引开始遍历本区域
       int ind = cloudSortInd[k];
       //如果该点是最平坦的点，并且在规定的最大平坦点数量内，则将其标记为普通特征点
+      //曲率最小的几个被标为3的点，或被标为3的远点，或点与前后点的角度小于15°的点；最终存为平面点
       if(((CloudFeatureFlag[ind] == 3) && (smallestPickedNum <= thNumFlat)) || 
           ((CloudFeatureFlag[ind] == 3) && (cloudDepth[ind] > thDistanceFaraway)) ||
           cloudAngle[ind] == 1){
@@ -397,6 +413,8 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       }
 
       // 如果该点是最尖锐的点，并且在规定的最大尖锐点数量内，并且反射强度满足一定条件，则将其标记为特殊特征点？？
+      //从反射强度最小的索引开始遍历本区域
+      //300——强度变化大于阈值且曲率很小的3个点
       int idx = reflectSortInd[k];
       if(cloudCurvature[idx] < 0.7 * thFlatThreshold * cloudDepth[idx] * thFlatThreshold * cloudDepth[idx]
          && sharpestPickedNum <= 3 && cloudReflect[idx] > 20.0){
@@ -410,10 +428,12 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   //---------------------------------------- line feature where surfaces meet -------------------------------------
   /*线特征提取（line feature where surfaces meet）：代码进一步处理点，以确定表面相遇处的断点。它查找左右曲率明显不同的点，并计算相邻点法线之间的夹角。如果角度低于阈值，则将该点标记为断点。*/
   for (int i = 5; i < cloudSize - 5; i += count_num ) {
+    //计算当前点 (x, y, z) 到原点 (0, 0, 0) 的欧几里得距离，即点的深度
     float depth = sqrt(_laserCloud->points[i].x * _laserCloud->points[i].x +
                        _laserCloud->points[i].y * _laserCloud->points[i].y +
                        _laserCloud->points[i].z * _laserCloud->points[i].z);
     //left curvature
+    //计算左曲率：计算左侧曲率的平方，通过计算当前点和其前四个相邻点之间的差值来得到。这里涉及到坐标差值的计算，并将差值平方后累加得到左曲率值，存储在变量 left_curvature 中。
     float ldiffX =
             _laserCloud->points[i - 4].x + _laserCloud->points[i - 3].x
             - 4 * _laserCloud->points[i - 2].x
@@ -431,21 +451,24 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
 
     float left_curvature = ldiffX * ldiffX + ldiffY * ldiffY + ldiffZ * ldiffZ;
 
+    //深度越大，给的范围就越大
     if(left_curvature < thFlatThreshold * depth){
 
       std::vector<PointType> left_list;
-
+      //如果认为是平面点，存到left_list中
       for(int j = -4; j < 0; j++){
         left_list.push_back(_laserCloud->points[i + j]);
       }
-
+      //把左侧标记为平面
       left_surf_flag = true;
     }
     else{
+      //把左侧标记为非平面
       left_surf_flag = false;
     }
 
     //right curvature
+    //右侧同理
     float rdiffX =
             _laserCloud->points[i + 4].x + _laserCloud->points[i + 3].x
             - 4 * _laserCloud->points[i + 2].x
@@ -465,14 +488,16 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
 
     if(right_curvature < thFlatThreshold * depth){
       std::vector<PointType> right_list;
-
+      //如果判断右侧是平面，把右侧四个点存入right_list
       for(int j = 1; j < 5; j++){
         right_list.push_back(_laserCloud->points[i + j]);
       }
+      //点云遍历步长改为4，跳过下面四个点的遍历，同时标记右侧为平面
       count_num = 4;
       right_surf_flag = true;
     }
     else{
+      //否则点云遍历步长还是1，标记右侧为非平面点
       count_num = 1;
       right_surf_flag = false;
     }
@@ -481,6 +506,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     if(left_surf_flag && right_surf_flag){
       debugnum4 ++;
 
+      //初始化两个 Eigen::Vector3d 对象 norm_left 和 norm_right，分别用于计算左侧和右侧特征组的法向量。应该不是法向量，不知道怎么命名？？？
       Eigen::Vector3d norm_left(0,0,0);
       Eigen::Vector3d norm_right(0,0,0);
       for(int k = 1;k<5;k++){
@@ -510,6 +536,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       double last_dis = last_tmp.norm();
       double current_dis = current_tmp.norm();
 
+      //150——两个面的夹角构成的边缘点
       if(cc < 0.5 && last_dis > 0.05 && current_dis > 0.05 ){ //
         debugnum5 ++;
         CloudFeatureFlag[i] = 150;
