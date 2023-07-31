@@ -851,13 +851,19 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   PCSeg pcseg;
   pcseg.DoSeg(idtrans,data,dnum);
 
+  //获取点云大小
   std::size_t cloud_num = laserCloud->size();
+  //遍历点云
   for(std::size_t i=0; i<cloud_num; ++i){
+    //normal_y是所在雷达线数
     int line_idx = _float_as_int(laserCloud->points[i].normal_y);
+    //？？？
     laserCloud->points[i].normal_z = _int_as_float(i);
+    //将点云放在对应雷达线数里
     vlines[line_idx]->push_back(laserCloud->points[i]);
   }
 
+  //长度为N_SCANS的线程数组，为每个扫描线都创建一个线程？
   std::thread threads[N_SCANS];
   for(int i=0; i<N_SCANS; ++i){
     threads[i] = std::thread(&LidarFeatureExtractor::detectFeaturePoint3, this, std::ref(vlines[i]),std::ref(vcorner[i]));
@@ -972,6 +978,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
   PCSeg pcseg;
   pcseg.DoSeg(idtrans,data,dnum);
 
+  //获取点云大小，没有剔除非法点
   std::size_t cloud_num = laserCloud->size();
 
   detectFeaturePoint2(laserCloud, laserSurfFeature, laserNonFeature);
@@ -1004,7 +1011,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
 
 }
 
-
+//只提取平面特征点和非特征点？？
 void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 pcl::PointCloud<PointType>::Ptr& pointsLessFlat,
                                                 pcl::PointCloud<PointType>::Ptr& pointsNonFeature){
@@ -1148,22 +1155,30 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
   }  
 }
 
-
+//只提取角点特征点？？
 void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 std::vector<int>& pointsLessSharp){
+  //存特征标志
   int CloudFeatureFlag[20000];
+  //存曲率
   float cloudCurvature[20000];
+  //存深度
   float cloudDepth[20000];
+  //曲率从小到大的索引
   int cloudSortInd[20000];
+  //存反射强度
   float cloudReflect[20000];
+  //反射强度从小到大的索引
   int reflectSortInd[20000];
+  //如果点与前后点的角度均小于15°，将该点标志置为1？？？？
   int cloudAngle[20000];
-
+  //传进来的点云指针给引用
   pcl::PointCloud<PointType>::Ptr& laserCloudIn = cloud;
-
+  //获取点云大小
   int cloudSize = laserCloudIn->points.size();
 
   PointType point;
+  //存储去除非法点后的点云
   pcl::PointCloud<PointType>::Ptr _laserCloud(new pcl::PointCloud<PointType>());
   _laserCloud->reserve(cloudSize);
 
@@ -1183,7 +1198,7 @@ void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr&
     _laserCloud->push_back(point);
     CloudFeatureFlag[i] = 0;
   }
-
+  //获取去除非法点后的点云
   cloudSize = _laserCloud->size();
 
   int count_num = 1;
