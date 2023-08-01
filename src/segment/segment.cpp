@@ -23,11 +23,18 @@ PCSeg::~PCSeg()
     }
 }
 
+/**
+ * pLabel1 输出的点云分类标签数组
+ * fPoints1 输入的点云数据数组
+ * pointNum 输入点云数据的点数
+*/
 int PCSeg::DoSeg(int *pLabel1, float* fPoints1, int pointNum)
 {
 
     // 1 down sampling
+    //用于存储下采样后的点云数据
     float *fPoints2=(float*)calloc(pointNum*4,sizeof(float));
+    //用于记录原始点云数据在下采样后数组fPoints2中的索引
     int *idtrans1=(int*)calloc(pointNum,sizeof(int));
     int *idtrans2=(int*)calloc(pointNum,sizeof(int));
     int pntNum=0;

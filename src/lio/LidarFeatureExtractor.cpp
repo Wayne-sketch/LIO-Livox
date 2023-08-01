@@ -811,7 +811,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   int *idtrans = (int*)calloc(dnum, sizeof(int));
   //动态分配内存，用于存储点云的(x, y, z, intensity)数据
   float *data=(float*)calloc(dnum*4,sizeof(float));
-  //？？？？
+  //往data里存数据用
   int point_num = 0;
 
   //获取消息中最后一个点的时间偏移，并转换成秒。
@@ -846,30 +846,37 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
 
 
     point_num++;
-  }
+  }//结束遍历所有点，数据存入data
 
+  //略 点云分割
   PCSeg pcseg;
   pcseg.DoSeg(idtrans,data,dnum);
 
-  //获取点云大小
+  //size_t = unsigned long long 获取点云大小
   std::size_t cloud_num = laserCloud->size();
-  //遍历点云
+  //遍历点云中的点
   for(std::size_t i=0; i<cloud_num; ++i){
     //normal_y是所在雷达线数
     int line_idx = _float_as_int(laserCloud->points[i].normal_y);
-    //？？？
+    //第几个点存入normal_z？？？
     laserCloud->points[i].normal_z = _int_as_float(i);
-    //将点云放在对应雷达线数里
+    //将点云放在对应雷达线数里 存入vlines 分线数存储点云
     vlines[line_idx]->push_back(laserCloud->points[i]);
   }
 
-  //长度为N_SCANS的线程数组，为每个扫描线都创建一个线程？
+  //长度为N_SCANS的线程数组，为每个扫描线都创建一个线程？ 创建一个包含N_SCANS个线程的线程数组。 一共N_SCANS扫描线数
   std::thread threads[N_SCANS];
   for(int i=0; i<N_SCANS; ++i){
+    //为每条扫描线创建一个线程，线程函数为LidarFeatureExtractor类中的detectFeaturePoint3函数，同时传入两个参数：vlines[i]和vcorner[i]的引用。
+    /**
+     * 使用可调用对象的成员函数构造函数：template <class F, class... Args, class M> explicit thread(F&& f, M&& m, Args&&... args);
+     * 创建一个新线程，并将执行函数设置为std::mem_fn(f)(m, args...)，其中f是可调用对象的成员函数指针，m是可调用对象的指针或引用，args是函数的参数。
+    */
     threads[i] = std::thread(&LidarFeatureExtractor::detectFeaturePoint3, this, std::ref(vlines[i]),std::ref(vcorner[i]));
   }
 
   for(int i=0; i<N_SCANS; ++i){
+    //当调用join()函数时，主线程会被阻塞，直到第i个线程执行完成。如果线程还没有执行完毕，主线程将等待直到该线程结束。一旦线程执行完成，join()函数会返回，主线程继续执行后面的代码。
     threads[i].join();
   }
 
