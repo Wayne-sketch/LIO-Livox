@@ -54,18 +54,20 @@ public:
       * \param[in] cloud: original lidar cloud need to be detected
       * ctx: 输入雷达点云
       * \param[in] pointsLessSharp: less sharp index of cloud
-      * ctx: ?
+      * ctx: 存角点特征点？？
       * \param[in] pointsLessFlat: less flat index of cloud
-      * ctx: ?
+      * ctx: 存平面特征点？？
       */
     void detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& cloud,
                             std::vector<int>& pointsLessSharp,
                             std::vector<int>& pointsLessFlat);
 
+    //点云特征检测，pointsNonfeature：无特征点？？
     void detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr& cloud,
                              pcl::PointCloud<PointType>::Ptr& pointsLessFlat,
                              pcl::PointCloud<PointType>::Ptr& pointsNonFeature);
 
+    //只提取角点特征点？？
     void detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr& cloud,
                              std::vector<int>& pointsLessSharp);
                 
@@ -130,19 +132,19 @@ private:
     /** \brief store surf feature index of each line */
     std::vector<std::vector<int>> vsurf;
 
-    int thNumCurvSize;
+    int thNumCurvSize;            //thNumCurvSize代表计算曲率时，被计算点两端要分别采用几个点
 
-    float thDistanceFaraway;
+    float thDistanceFaraway;      //判断是否为远点的阈值
 
-    int thNumFlat;
+    int thNumFlat;                //一个区域内最大允许的的平面点数量，也有可能选出来的平面点数量比thNumFlat大
     
-    int thPartNum;
+    int thPartNum;                //一次扫描平均分成几个区域，每个区域中对平面特征点（平面点）/角点特征点（边缘点）的数目有限制
 
-    float thFlatThreshold;
+    float thFlatThreshold;        //判断是否是平面点的阈值
 
-    float thBreakCornerDis;
+    float thBreakCornerDis;       //判断是否为break point的阈值
 
-    float thLidarNearestDis;  
+    float thLidarNearestDis;      //距离小于这个值，不要
 };
 
 #endif //LIO_LIVOX_LIDARFEATUREEXTRACTOR_H
