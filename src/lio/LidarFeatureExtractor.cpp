@@ -1,16 +1,6 @@
 #include "LidarFeatureExtractor/LidarFeatureExtractor.h"
 
-//ctx: 构造函数，初始化列表 9个参数
-/*
-1、n_scans: int，lidar扫描线数
-2、NumCurvSize: int，表示曲率点的数量 ？
-3、DistanceFaraway: float，表示远处的距离。
-4、NumFlat: int，表示平坦点的数量。
-5、PartNum: int，表示对点云分割区域的数量。
-6、FlatThreshold: float，表示平坦度的阈值。
-7、BreakCornerDis: float，表示打破角点的距离。
-8、LidarNearestDis: float，表示激光雷达最近点的距离。
-9、KdTreeCornerOutlierDis: float，表示Kd树角点的离群值距离。没用到？*/
+//构造函数
 LidarFeatureExtractor::LidarFeatureExtractor(int n_scans,int NumCurvSize,float DistanceFaraway,int NumFlat,
                                              int PartNum,float FlatThreshold,float BreakCornerDis,float LidarNearestDis,float KdTreeCornerOutlierDis)
                                              :N_SCANS(n_scans),//lidar扫描线数
@@ -769,7 +759,8 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
 }
 
 
-/*
+/**
+*从msg里读取传感器发来的点云信息，把信息提取出来存入laserCloud
 *msg: 传感器采集的点云消息，类型为livox_ros_driver::CustomMsgConstPtr
 *laserCloud: 输入的原始点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
 *laserConerFeature: 输出的角点特征点的点云，类型为pcl::PointCloud<PointType>::Ptr&，是一个指向PointCloud的智能指针引用
@@ -792,28 +783,54 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   laserCloud->clear();
   //预留点云空间
   laserCloud->reserve(15000*N_SCANS);
+  // vlines 保存每条线的原始数据，每个元素都是点云指针，代表一条lidar线上的点云
   for(auto & ptr : vlines){
     ptr->clear();
   }
-  //清空角点特征点
+  //vcorner 每一个元素都是点云指针，代表一束线上的角点特征点
   for(auto & v : vcorner){
     v.clear();
   }
-  //清空平面特征点
+  //vsurf 每一个元素都是点云指针，代表一束线上的平面特征点
   for(auto & v : vsurf){
     v.clear();
   }
 
+  //以下三个变量的定义是为了做点云分割设置的
   //获取输入点云点的数量
   int dnum = msg->points.size();
 
-  //动态分配内存，存储点云点ID？？？
+  //动态分配内存，存储点云点ID
   int *idtrans = (int*)calloc(dnum, sizeof(int));
   //动态分配内存，用于存储点云的(x, y, z, intensity)数据
   float *data=(float*)calloc(dnum*4,sizeof(float));
   //往data里存数据用
   int point_num = 0;
 
+// 览沃 pointcloud2(PointXYZRTL) 点云格式，详细说明如下:
+// float32 x               # X axis, unit:m
+// float32 y               # Y axis, unit:m
+// float32 z               # Z axis, unit:m
+// float32 intensity       # the value is reflectivity, 0.0~255.0
+// uint8 tag               # livox tag
+// uint8 line              # laser number in lidar
+
+// 览沃自定义数据包格式，详细说明如下 :
+// Header header             # ROS standard message header
+// uint64 timebase           # The time of first point
+// uint32 point_num          # Total number of pointclouds
+// uint8  lidar_id           # Lidar device id number
+// uint8[3]  rsvd            # Reserved use
+// CustomPoint[] points      # Pointcloud data
+
+// 上述自定义数据包中的自定义点云（CustomＰoint）格式 :
+// uint32 offset_time      # offset time relative to the base time
+// float32 x               # X axis, unit:m
+// float32 y               # Y axis, unit:m
+// float32 z               # Z axis, unit:m
+// uint8 reflectivity      # reflectivity, 0~255
+// uint8 tag               # livox tag
+// uint8 line              # laser number in lidar
   //获取消息中最后一个点的时间偏移，并转换成秒。
   double timeSpan = ros::Time().fromNSec(msg->points.back().offset_time).toSec();
   PointType point;
@@ -822,7 +839,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
     int line_num = (int)p.line;
     //如果当前点所在的线数大于设定要使用的的最大线数(Used_Line)，则跳过该点，继续下一个点
     if(line_num > Used_Line-1) continue;
-    //如果当前点的x坐标小于0.01，说明该点无效，跳过该点，继续下一个点 为什么无效？？？
+    //如果当前点的x坐标小于0.01m，说明该点无效，跳过该点，继续下一个点 为什么无效？？？距离过近可能会产生畸变
     if(p.x < 0.01) continue;
     //如果当前点的x、y或z坐标无限大或无限小，说明该点无效，跳过该点，继续下一个点
     if (!pcl_isfinite(p.x) ||
@@ -833,7 +850,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
     point.x = p.x;
     point.y = p.y;
     point.z = p.z;
-    point.intensity = p.reflectivity;
+    point.intensity = p.reflectivity; //0~255
     //将当前点的offset_time转换成秒，并除以timeSpan，存储到point的normal_x字段中，将当前点所在的线数转换成浮点数，并存储到point的normal_y字段中
     point.normal_x = ros::Time().fromNSec(p.offset_time).toSec() /timeSpan;
     point.normal_y = _int_as_float(line_num);
@@ -858,13 +875,13 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   for(std::size_t i=0; i<cloud_num; ++i){
     //normal_y是所在雷达线数
     int line_idx = _float_as_int(laserCloud->points[i].normal_y);
-    //第几个点存入normal_z？？？
+    //第几个点（索引）存入normal_z
     laserCloud->points[i].normal_z = _int_as_float(i);
     //将点云放在对应雷达线数里 存入vlines 分线数存储点云
     vlines[line_idx]->push_back(laserCloud->points[i]);
   }
 
-  //长度为N_SCANS的线程数组，为每个扫描线都创建一个线程？ 创建一个包含N_SCANS个线程的线程数组。 一共N_SCANS扫描线数
+  //长度为N_SCANS的线程数组，为每个扫描线都创建一个线程
   std::thread threads[N_SCANS];
   for(int i=0; i<N_SCANS; ++i){
     //为每条扫描线创建一个线程，线程函数为LidarFeatureExtractor类中的detectFeaturePoint3函数，同时传入两个参数：vlines[i]和vcorner[i]的引用。
@@ -872,6 +889,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
      * 使用可调用对象的成员函数构造函数：template <class F, class... Args, class M> explicit thread(F&& f, M&& m, Args&&... args);
      * 创建一个新线程，并将执行函数设置为std::mem_fn(f)(m, args...)，其中f是可调用对象的成员函数指针，m是可调用对象的指针或引用，args是函数的参数。
     */
+   //调用当前类的成员函数，传入的参数是引用
     threads[i] = std::thread(&LidarFeatureExtractor::detectFeaturePoint3, this, std::ref(vlines[i]),std::ref(vcorner[i]));
   }
 
@@ -883,17 +901,20 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   int num_corner = 0;
   for(int i=0; i<N_SCANS; ++i){
     for(int j=0; j<vcorner[i].size(); ++j){
+      //vcorner[i][j].normal_z 第i束激光的第j的角点特征点在点云中的索引 把laserCloud中对应的点的normal_z改为1 可能为了表示该点已被选为角点特征点？？
       laserCloud->points[_float_as_int(vlines[i]->points[vcorner[i][j]].normal_z)].normal_z = 1.0; 
       num_corner++;
     }
   }
-
+  //只提取平面特征点和非特征点
   detectFeaturePoint2(laserCloud, laserSurfFeature, laserNonFeature);
-
+  
   for(std::size_t i=0; i<cloud_num; ++i){
+    //求点云中点的深度
     float dis = laserCloud->points[i].x * laserCloud->points[i].x
                 + laserCloud->points[i].y * laserCloud->points[i].y
                 + laserCloud->points[i].z * laserCloud->points[i].z;
+    //idtrans是点云分类标签数组 normal_z=0代表是？？？
     if( idtrans[i] > 9 && dis < 50*50){
       laserCloud->points[i].normal_z = 0;
     }
@@ -905,10 +926,12 @@ void LidarFeatureExtractor::FeatureExtract_with_segment(const livox_ros_driver::
   laserSurfFeature.reset(new pcl::PointCloud<PointType>());
   laserNonFeature.reset(new pcl::PointCloud<PointType>());
   for(const auto& p : laserCloud->points){
+    //normal_z=1 代表是角点特征点
     if(std::fabs(p.normal_z - 1.0) < 1e-5)
       laserConerFeature->push_back(p);
   }
 
+  //normal_z=2和3 代表是平面特征点和非特征点
   for(const auto& p : laserCloud->points){
     if(std::fabs(p.normal_z - 2.0) < 1e-5)
       laserSurfFeature->push_back(p);
@@ -945,7 +968,7 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
 
   //获取输入点云点的数量
   int dnum = msg->points.size();
-  //动态分配内存，存储点云点ID？？？
+  //动态分配内存，存储点云点ID
   int *idtrans = (int*)calloc(dnum, sizeof(int));
   //动态分配内存，用于存储点云的(x, y, z, intensity)数据
   float *data=(float*)calloc(dnum*4,sizeof(float));
@@ -984,8 +1007,8 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
 
   PCSeg pcseg;
   pcseg.DoSeg(idtrans,data,dnum);
-
-  //获取点云大小，没有剔除非法点
+//函数hap和不加hap的区别就是这段代码，hap缺少这段代码，少了多线程调用detectFeaturePoint3提取角点特征点的部分
+  //获取点云大小
   std::size_t cloud_num = laserCloud->size();
 
   detectFeaturePoint2(laserCloud, laserSurfFeature, laserNonFeature);
@@ -1018,37 +1041,43 @@ void LidarFeatureExtractor::FeatureExtract_with_segment_hap(const livox_ros_driv
 
 }
 
-//只提取平面特征点和非特征点？？
+//只提取平面特征点和非特征点
+//laserCloud传进来
 void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 pcl::PointCloud<PointType>::Ptr& pointsLessFlat,
                                                 pcl::PointCloud<PointType>::Ptr& pointsNonFeature){
-
+  //点云大小
   int cloudSize = cloud->points.size();
-
+  //智能指针指向新的空间，并释放原来的空间
   pointsLessFlat.reset(new pcl::PointCloud<PointType>());
   pointsNonFeature.reset(new pcl::PointCloud<PointType>());
-
+  //KdTree存储点云
   pcl::KdTreeFLANN<PointType>::Ptr KdTreeCloud;
   KdTreeCloud.reset(new pcl::KdTreeFLANN<PointType>);
+  //设置用于构建Kd树的输入点云数据
   KdTreeCloud->setInputCloud(cloud);
 
   std::vector<int> _pointSearchInd;
   std::vector<float> _pointSearchSqDis;
 
+  //KdTree K近邻搜索时的最近邻点数
   int num_near = 10;
+  //点云遍历步长
   int stride = 1;
+  //根据点的深度确定满足条件的平面特征点给定的范围
   int interval = 4;
 
   for(int i = 5; i < cloudSize - 5; i = i+stride) {
+    //如果已经被选为角点特征点，跳过该点
     if(fabs(cloud->points[i].normal_z - 1.0) < 1e-5) {
       continue;
     }
-
+    //判断特征值贡献度的一些阈值
     double thre1d = 0.5;
     double thre2d = 0.8;
     double thre3d = 0.5;
     double thre3d2 = 0.13;
-
+    //求点的深度
     double disti = sqrt(cloud->points[i].x * cloud->points[i].x + 
                         cloud->points[i].y * cloud->points[i].y + 
                         cloud->points[i].z * cloud->points[i].z);
@@ -1069,8 +1098,9 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
 
     if(disti > 100.0) {
       num_near = 6;
-
+      //远点normal_z设为3
       cloud->points[i].normal_z = 3.0;
+      //同时把该远点放入pointsNonFeature
       pointsNonFeature->points.push_back(cloud->points[i]);
       continue;
     } else if(disti > 60.0) {
@@ -1078,9 +1108,11 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
     } else {
       num_near = 10;
     }
-
+    //K近邻搜索
+    //_pointSearchInd：返回查询到的最近邻点的索引列表。该参数是一个输出参数，用于存储查询到的最近邻点在输入点云中的索引
+    //_pointSearchSqDis：返回查询到的最近邻点与查询点之间的距离列表。该参数也是一个输出参数，用于存储查询到的最近邻点与查询点之间的距离
     KdTreeCloud->nearestKSearch(cloud->points[i], num_near, _pointSearchInd, _pointSearchSqDis);
-
+    //第num_near近的点
     if (_pointSearchSqDis[num_near-1] > 5.0 && disti < 90.0) {
       continue;
     }
@@ -1091,6 +1123,7 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
     float cx = 0;
     float cy = 0;
     float cz = 0;
+    //求当前点最近邻点的平均坐标
     for (int j = 0; j < num_near; j++) {
       cx += cloud->points[_pointSearchInd[j]].x;
       cy += cloud->points[_pointSearchInd[j]].y;
@@ -1124,7 +1157,7 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
     a22 /= num_near;
     a23 /= num_near;
     a33 /= num_near;
-
+    //最近邻点分布的协方差矩阵
     _matA1(0, 0) = a11;
     _matA1(0, 1) = a12;
     _matA1(0, 2) = a13;
@@ -1134,14 +1167,26 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
     _matA1(2, 0) = a13;
     _matA1(2, 1) = a23;
     _matA1(2, 2) = a33;
-
+    //计算特征值和特征向量
+    /*这行代码创建了一个SelfAdjointEigenSolver对象saes，用于对3x3的实对称矩阵_matA1进行特征值和特征向量的计算。
+    Eigen库提供了不同类型的特征值求解器，SelfAdjointEigenSolver适用于实对称矩阵，它保证了特征值是实数，
+    特征向量是正交的。*/
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(_matA1);
+    /*在这行代码中，saes.eigenvalues()返回计算得到的特征值的向量。saes.eigenvalues()[i]表示第i个特征值。这里我们
+    使用[2]、[1]和[0]索引分别获取了特征值的第三个（最大特征值）、第二个和第一个（最小特征值）元素。变量a1d计算了特征
+    值的第三个元素与第二个元素    之间的差，并除以特征值的第三个元素。这个计算是为了获得特征值中第三个元素对于特征值
+    整体尺度的贡献程度。*/
     double a1d = (sqrt(saes.eigenvalues()[2]) - sqrt(saes.eigenvalues()[1])) / sqrt(saes.eigenvalues()[2]);
+    /*这行代码类似于上一行，但是计算的是特征值的第二个元素与第一个元素之间的差，并除以特征值的第三个元素。这个计算是
+    为了获得特征值中第二个元素对于特征值整体尺度的贡献程度*/
     double a2d = (sqrt(saes.eigenvalues()[1]) - sqrt(saes.eigenvalues()[0])) / sqrt(saes.eigenvalues()[2]);
+    /*这行代码计算的是特征值的第一个元素除以特征值的第三个元素。这个计算是为了获得特征值中第一个元素对于特征值整体尺度的贡献程度。*/
     double a3d = sqrt(saes.eigenvalues()[0]) / sqrt(saes.eigenvalues()[2]);
 
+    //如果满足条件，当前点前后interval个点（包括当前点）都算作平面特征点
     if(a2d > thre2d || (a3d < thre3d2 && a1d < thre1d)) {
       for(int k = 1; k < interval; k++) {
+        //normal_z=2代表平面特征点
         cloud->points[i-k].normal_z = 2.0;
         pointsLessFlat->points.push_back(cloud->points[i-k]);
         cloud->points[i+k].normal_z = 2.0;
@@ -1149,7 +1194,7 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
       }
       cloud->points[i].normal_z = 2.0;
       pointsLessFlat->points.push_back(cloud->points[i]);
-    } else if(a3d > thre3d) {
+    } else if(a3d > thre3d) {//满足条件算作非特征点
       for(int k = 1; k < interval; k++) {
         cloud->points[i-k].normal_z = 3.0;
         pointsNonFeature->points.push_back(cloud->points[i-k]);
@@ -1162,7 +1207,7 @@ void LidarFeatureExtractor::detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr&
   }  
 }
 
-//只提取角点特征点？？
+//只提取角点特征点
 void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 std::vector<int>& pointsLessSharp){
   //存特征标志
@@ -1377,6 +1422,10 @@ void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr&
   int num_surf = 0;
   int num_corner = 0;
 
+/**
+ * 和detectFeaturePoint提取角点特征点的部分的区别在这里以下的部分
+*/
+  //遍历点云
   for(int i = 5; i < cloudSize - 5; i ++){
     Eigen::Vector3d left_pt = Eigen::Vector3d(_laserCloud->points[i - 1].x,
                                               _laserCloud->points[i - 1].y,
@@ -1388,15 +1437,17 @@ void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr&
     Eigen::Vector3d cur_pt = Eigen::Vector3d(_laserCloud->points[i].x,
                                              _laserCloud->points[i].y,
                                              _laserCloud->points[i].z);
-
+    //当前点深度
     float dis = _laserCloud->points[i].x * _laserCloud->points[i].x +
                 _laserCloud->points[i].y * _laserCloud->points[i].y +
                 _laserCloud->points[i].z * _laserCloud->points[i].z;
-
+    //原点到左点的向量和原点到右点的向量之间夹角余弦值
     double clr = fabs(left_pt.dot(right_pt) / (left_pt.norm()*right_pt.norm()));
+    //原点到左点的向量和原点到当前点的向量之间夹角余弦值
     double cl = fabs(left_pt.dot(cur_pt) / (left_pt.norm()*cur_pt.norm()));
+    //原点到当前点的向量和原点到右点的向量之间夹角余弦值
     double cr = fabs(right_pt.dot(cur_pt) / (right_pt.norm()*cur_pt.norm()));
-
+    //？？？？？？？？？？？？
     if(clr < 0.999){
       CloudFeatureFlag[i] = 200;
     }
@@ -1416,12 +1467,13 @@ void LidarFeatureExtractor::detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr&
 
 }
 
-
+//根据雷达种类特征提取 
 void LidarFeatureExtractor::FeatureExtract(const livox_ros_driver::CustomMsgConstPtr &msg,
                                            pcl::PointCloud<PointType>::Ptr& laserCloud,
                                            pcl::PointCloud<PointType>::Ptr& laserConerFeature,
                                            pcl::PointCloud<PointType>::Ptr& laserSurfFeature,
                                            const int Used_Line,const int lidar_type){
+  /*msg信息先存入laserCloud*/
   laserCloud->clear();
   laserConerFeature->clear();
   laserSurfFeature->clear();
@@ -1440,6 +1492,7 @@ void LidarFeatureExtractor::FeatureExtract(const livox_ros_driver::CustomMsgCons
   for(const auto& p : msg->points){
   int line_num = (int)p.line;
   if(line_num > Used_Line-1) continue;
+  //根据雷达类型 过滤过近的点
   if(lidar_type == 0||lidar_type == 1)
   {
       if(p.x < 0.01) continue;
@@ -1453,17 +1506,24 @@ void LidarFeatureExtractor::FeatureExtract(const livox_ros_driver::CustomMsgCons
   point.y = p.y;
   point.z = p.z;
   point.intensity = p.reflectivity;
+  //记录时间 当前点相对第一个点的偏移时间/最后一个点相对第一个点的偏移时间
   point.normal_x = ros::Time().fromNSec(p.offset_time).toSec() /timeSpan;
+  //normal_y存所在雷达线数
   point.normal_y = _int_as_float(line_num);
   laserCloud->push_back(point);
   }
+  //点云点数
+  //点云中的点分到vlines中去
   std::size_t cloud_num = laserCloud->size();
   for(std::size_t i=0; i<cloud_num; ++i){
   int line_idx = _float_as_int(laserCloud->points[i].normal_y);
+  //？？？？？
   laserCloud->points[i].normal_z = _int_as_float(i);
   vlines[line_idx]->push_back(laserCloud->points[i]);
+  //？？？？？
   laserCloud->points[i].normal_z = 0;
   }
+  //多线程调用detectFeaturePoint
   std::thread threads[N_SCANS];
   for(int i=0; i<N_SCANS; ++i){
   threads[i] = std::thread(&LidarFeatureExtractor::detectFeaturePoint, this, std::ref(vlines[i]),
@@ -1474,9 +1534,11 @@ void LidarFeatureExtractor::FeatureExtract(const livox_ros_driver::CustomMsgCons
   }
   for(int i=0; i<N_SCANS; ++i){
   for(int j=0; j<vcorner[i].size(); ++j){
+  //normal_z=1代表角点特征点
   laserCloud->points[_float_as_int(vlines[i]->points[vcorner[i][j]].normal_z)].normal_z = 1.0;
   }
   for(int j=0; j<vsurf[i].size(); ++j){
+  //normal_z=2代表平面特征点
   laserCloud->points[_float_as_int(vlines[i]->points[vsurf[i][j]].normal_z)].normal_z = 2.0;
   }
   }
@@ -1534,7 +1596,7 @@ void LidarFeatureExtractor::FeatureExtract_hap(const livox_ros_driver::CustomMsg
     point.normal_y = _int_as_float(line_num);
     laserCloud->push_back(point);
   }
-
+  //和FeatureExtract的区别之处
   detectFeaturePoint2(laserCloud, laserSurfFeature, laserNonFeature);
 
   pcl::PointCloud<PointType>::Ptr laserConerFeature_filter;
@@ -1555,6 +1617,7 @@ void LidarFeatureExtractor::FeatureExtract_hap(const livox_ros_driver::CustomMsg
   }
 }
 
+//全部线束都取 调用detectFeaturePoint
 void LidarFeatureExtractor::FeatureExtract_Mid(pcl::PointCloud<pcl::PointXYZINormal>::Ptr &msg,
                                            pcl::PointCloud<PointType>::Ptr& laserConerFeature,
                                            pcl::PointCloud<PointType>::Ptr& laserSurfFeature){
