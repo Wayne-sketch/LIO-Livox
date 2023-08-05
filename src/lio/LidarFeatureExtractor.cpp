@@ -139,7 +139,6 @@ bool LidarFeatureExtractor::plane_judge(const std::vector<PointType>& point_list
 
 //点云特征提取
 //第一个参数是点云指针的引用，类一般都传引用，应该是避免调用拷贝构造函数，提取的特征点存储在两个vector中
-//该算法旨在检测三种类型的特征点：尖锐的拐角、平坦的表面以及表面相遇处的断点？？？？
 //输出：先添加到laserCloudCorner点云中，再将角点特征点和平面特征点的索引分别添加到pointsLessSharp和pointsLessFlat向量中。
 void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& cloud,
                                                 std::vector<int>& pointsLessSharp,
@@ -236,7 +235,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
   int scanStartInd = 5;
   int scanEndInd = cloudSize - 6;
 
-  //用于记录距离过远的点的数量，作为特征的一部分。？？
+  //用于记录距离过远的点的数量
   int thDistanceFaraway_fea = 0;
   //遍历从第6个点到倒数第6个点的点云数据。
   for (int i = 5; i < cloudSize - 5; i ++ ) {
@@ -359,7 +358,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
           if (diffX * diffX + diffY * diffY + diffZ * diffZ > 0.02 || cloudDepth[ind] > thDistanceFaraway) {
             break;
           }
-          // 经过考验后，标记为3的点后面的点标记为1 也可能是平面特征点？？？？？？？？？
+          // 经过考验后，标记为3的点后面的点标记为1 也可能是平面特征点？？？？？？？？？但是后面没有再利用1这个标志
           CloudFeatureFlag[ind + l] = 1;
         }
         //向前查找一定数量的点，如果这些点的坐标变化不大，则将这些点也标记为平坦特征点（待定）
@@ -396,7 +395,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
       }
 
       //从反射强度最小的索引开始遍历本区域
-      //300——强度大于阈值且曲率很小的3个点
+      //300——反射强度大于阈值且曲率很小的3个点
       int idx = reflectSortInd[k];
       if(cloudCurvature[idx] < 0.7 * thFlatThreshold * cloudDepth[idx] * thFlatThreshold * cloudDepth[idx]
          && sharpestPickedNum <= 3 && cloudReflect[idx] > 20.0){
@@ -489,7 +488,7 @@ void LidarFeatureExtractor::detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& 
     if(left_surf_flag && right_surf_flag){
       debugnum4 ++;
 
-      //初始化两个 Eigen::Vector3d 对象 norm_left 和 norm_right，分别用于计算左侧和右侧特征组的法向量。应该不是法向量，不知道怎么命名？？？
+      //初始化两个 Eigen::Vector3d 对象 norm_left 和 norm_right
       Eigen::Vector3d norm_left(0,0,0);
       Eigen::Vector3d norm_right(0,0,0);
       //算左侧四个点三维坐标到当前点差值，归一化后求加权平均，离得越远占比越大

@@ -54,20 +54,20 @@ public:
       * \param[in] cloud: original lidar cloud need to be detected
       * ctx: 输入雷达点云
       * \param[in] pointsLessSharp: less sharp index of cloud
-      * ctx: 存角点特征点？？
+      * ctx: 存角点特征点
       * \param[in] pointsLessFlat: less flat index of cloud
-      * ctx: 存平面特征点？？
+      * ctx: 存平面特征点
       */
     void detectFeaturePoint(pcl::PointCloud<PointType>::Ptr& cloud,
                             std::vector<int>& pointsLessSharp,
                             std::vector<int>& pointsLessFlat);
 
-    //点云特征检测，pointsNonfeature：无特征点？？
+    //点云特征检测，pointsNonfeature：不规则特征点
     void detectFeaturePoint2(pcl::PointCloud<PointType>::Ptr& cloud,
                              pcl::PointCloud<PointType>::Ptr& pointsLessFlat,
                              pcl::PointCloud<PointType>::Ptr& pointsNonFeature);
 
-    //只提取角点特征点？？
+    //只提取角点特征点
     void detectFeaturePoint3(pcl::PointCloud<PointType>::Ptr& cloud,
                              std::vector<int>& pointsLessSharp);
                 
@@ -79,7 +79,7 @@ public:
                                      pcl::PointCloud<PointType>::Ptr& laserNonFeature,
                                      sensor_msgs::PointCloud2 &msg2,
                                      int Used_Line = 1);
-
+    //hap雷达
     void FeatureExtract_with_segment_hap(const livox_ros_driver::CustomMsgConstPtr &msg,
                                      	 pcl::PointCloud<PointType>::Ptr& laserCloud,
                                      	 pcl::PointCloud<PointType>::Ptr& laserConerFeature,
@@ -95,9 +95,9 @@ public:
       * \param[in] laserCloud: transform CustomMsg to pcl point cloud format
       * ctx: 将原始数据转化为pcl点云
       * \param[in] laserConerFeature: less Coner features extracted from laserCloud
-      * ctx: 从laserCloud中提取的(较少?)Coner特征
+      * ctx: 从laserCloud中提取的角点特征点
       * \param[in] laserSurfFeature: less Surf features extracted from laserCloud
-      * ctx: 从laserCloud提取的(较少?)曲面特征
+      * ctx: 从laserCloud提取的平面特征点
       */
     void FeatureExtract(const livox_ros_driver::CustomMsgConstPtr &msg,
                         pcl::PointCloud<PointType>::Ptr& laserCloud,
